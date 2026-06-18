@@ -18,6 +18,11 @@ from verdictmesh.domain import (
     RiskDecision,
     TradeProposal,
 )
+from verdictmesh.evidence_models import (
+    EvidenceCollectionRequest,
+    EvidenceCollectionResult,
+    EvidencePackage,
+)
 from verdictmesh.forecast_models import (
     ConsensusRequest,
     CouncilForecast,
@@ -42,6 +47,11 @@ class FillSimulationRequest(BaseModel):
     amount: float = Field(gt=0)
 
 
+class AutonomousForecastResponse(BaseModel):
+    evidence: EvidenceCollectionResult
+    forecast: CouncilForecast | None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
@@ -56,7 +66,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     return FastAPI(
         title="VerdictMesh API",
-        version="0.4.0",
+        version="0.5.0",
         description="Prediction-market intelligence and risk platform",
         lifespan=lifespan,
     )
@@ -85,6 +95,7 @@ def health(
         "trading_mode": settings.trading_mode,
         "live_trading_enabled": settings.live_trading_enabled,
         "order_book_scanner_enabled": settings.order_book_scanner_enabled,
+        "evidence_provider": "gdelt-doc",
         "forecast_model": settings.forecast_model,
         "forecast_api_configured": bool(settings.anthropic_api_key),
         "audit": service.audit_counts(),
@@ -137,6 +148,25 @@ def simulate_fill(
     return estimate
 
 
+@app.post("/evidence/collect", response_model=EvidenceCollectionResult)
+async def collect_evidence(
+    payload: EvidenceCollectionRequest,
+    service: ServiceDependency,
+) -> EvidenceCollectionResult:
+    try:
+        return await service.collect_evidence(payload)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Evidence collection failed") from exc
+
+
+@app.get("/evidence/packages")
+def evidence_packages(
+    service: ServiceDependency,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> list[EvidencePackage]:
+    return service.recent_evidence_packages(limit)
+
+
 @app.post("/forecast/consensus", response_model=CouncilForecast)
 def forecast_consensus(
     payload: ConsensusRequest,
@@ -159,6 +189,20 @@ async def run_forecast(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail="Forecast council failed") from exc
+
+
+@app.post("/forecast/auto", response_model=AutonomousForecastResponse)
+async def autonomous_forecast(
+    payload: EvidenceCollectionRequest,
+    service: ServiceDependency,
+) -> AutonomousForecastResponse:
+    try:
+        evidence_result, forecast = await service.run_autonomous_forecast(payload)
+        return AutonomousForecastResponse(evidence=evidence_result, forecast=forecast)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Autonomous forecast failed") from exc
 
 
 @app.get("/forecast/runs")
