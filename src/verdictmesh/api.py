@@ -18,6 +18,11 @@ from verdictmesh.domain import (
     RiskDecision,
     TradeProposal,
 )
+from verdictmesh.forecast_models import (
+    ConsensusRequest,
+    CouncilForecast,
+    ForecastRequest,
+)
 from verdictmesh.service import VerdictMeshService
 
 
@@ -51,7 +56,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     return FastAPI(
         title="VerdictMesh API",
-        version="0.3.0",
+        version="0.4.0",
         description="Prediction-market intelligence and risk platform",
         lifespan=lifespan,
     )
@@ -80,6 +85,8 @@ def health(
         "trading_mode": settings.trading_mode,
         "live_trading_enabled": settings.live_trading_enabled,
         "order_book_scanner_enabled": settings.order_book_scanner_enabled,
+        "forecast_model": settings.forecast_model,
+        "forecast_api_configured": bool(settings.anthropic_api_key),
         "audit": service.audit_counts(),
     }
 
@@ -128,6 +135,38 @@ def simulate_fill(
     if estimate is None:
         raise HTTPException(status_code=404, detail="No orderbook history for asset")
     return estimate
+
+
+@app.post("/forecast/consensus", response_model=CouncilForecast)
+def forecast_consensus(
+    payload: ConsensusRequest,
+    service: ServiceDependency,
+) -> CouncilForecast:
+    try:
+        return service.aggregate_forecast(payload.request, payload.agents)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/forecast/run", response_model=CouncilForecast)
+async def run_forecast(
+    payload: ForecastRequest,
+    service: ServiceDependency,
+) -> CouncilForecast:
+    try:
+        return await service.run_forecast(payload)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Forecast council failed") from exc
+
+
+@app.get("/forecast/runs")
+def forecast_runs(
+    service: ServiceDependency,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> list[CouncilForecast]:
+    return service.recent_forecasts(limit)
 
 
 @app.post("/risk/evaluate", response_model=RiskDecision)
