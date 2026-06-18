@@ -3,12 +3,16 @@ from contextlib import asynccontextmanager
 from typing import Annotated, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from verdictmesh.config import Settings, get_settings
 from verdictmesh.domain import (
     DecisionAudit,
+    FillEstimate,
     MarketSnapshot,
+    OrderAction,
+    OrderBookScanResult,
+    OrderBookSnapshot,
     PaperOrder,
     RiskContext,
     RiskDecision,
@@ -27,10 +31,17 @@ class PaperOrderResponse(BaseModel):
     order: PaperOrder | None
 
 
+class FillSimulationRequest(BaseModel):
+    asset_id: str = Field(min_length=1)
+    action: OrderAction
+    amount: float = Field(gt=0)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     app.state.service = VerdictMeshService(settings)
+    await app.state.service.start()
     try:
         yield
     finally:
@@ -40,7 +51,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     return FastAPI(
         title="VerdictMesh API",
-        version="0.2.0",
+        version="0.3.0",
         description="Prediction-market intelligence and risk platform",
         lifespan=lifespan,
     )
@@ -68,6 +79,7 @@ def health(
         "environment": settings.app_env,
         "trading_mode": settings.trading_mode,
         "live_trading_enabled": settings.live_trading_enabled,
+        "order_book_scanner_enabled": settings.order_book_scanner_enabled,
         "audit": service.audit_counts(),
     }
 
@@ -81,6 +93,41 @@ async def markets(
         return await service.scan_markets(limit)
     except Exception as exc:
         raise HTTPException(status_code=502, detail="Market data provider unavailable") from exc
+
+
+@app.post("/scanner/orderbooks", response_model=OrderBookScanResult)
+async def scan_orderbooks(
+    service: ServiceDependency,
+    market_limit: Annotated[int | None, Query(ge=1, le=500)] = None,
+) -> OrderBookScanResult:
+    try:
+        return await service.scan_order_books(market_limit)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Orderbook scan failed") from exc
+
+
+@app.get("/history/orderbooks/{asset_id}")
+def orderbook_history(
+    asset_id: str,
+    service: ServiceDependency,
+    limit: Annotated[int, Query(ge=1, le=1_000)] = 100,
+) -> list[OrderBookSnapshot]:
+    return service.order_book_history(asset_id, limit)
+
+
+@app.post("/backtest/fill", response_model=FillEstimate)
+def simulate_fill(
+    payload: FillSimulationRequest,
+    service: ServiceDependency,
+) -> FillEstimate:
+    estimate = service.estimate_historical_fill(
+        payload.asset_id,
+        payload.action,
+        payload.amount,
+    )
+    if estimate is None:
+        raise HTTPException(status_code=404, detail="No orderbook history for asset")
+    return estimate
 
 
 @app.post("/risk/evaluate", response_model=RiskDecision)
