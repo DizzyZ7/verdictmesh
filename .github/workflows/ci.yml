@@ -22,3 +22,5 @@ jobs:
       - run: ruff check .
       - run: mypy src
       - run: pytest
+      - run: DATABASE_URL=sqlite+pysqlite:///./migration-test.db alembic upgrade head
+      - run: DATABASE_URL=sqlite+pysqlite:///./migration-test.db alembic downgrade base
