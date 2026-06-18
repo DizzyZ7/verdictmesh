@@ -1,8 +1,29 @@
 services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: verdictmesh
+      POSTGRES_USER: verdictmesh
+      POSTGRES_PASSWORD: verdictmesh
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U verdictmesh -d verdictmesh"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   api:
     build: .
     env_file:
       - .env
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       - "8000:8000"
     restart: unless-stopped
+
+volumes:
+  postgres_data:
