@@ -22,6 +22,9 @@ from verdictmesh.domain import (
     TradeProposal,
     TradingMode,
 )
+from verdictmesh.evidence import EvidenceCollector, package_to_forecast_request
+from verdictmesh.evidence_models import EvidenceCollectionRequest, EvidenceCollectionResult, EvidencePackage
+from verdictmesh.evidence_store import EvidenceRepository
 from verdictmesh.forecast import CouncilThresholds, ForecastCouncil
 from verdictmesh.forecast import (
     aggregate_forecasts as aggregate_council_forecasts,
@@ -32,6 +35,7 @@ from verdictmesh.forecast_models import (
     ForecastRequest,
 )
 from verdictmesh.forecast_store import ForecastRepository
+from verdictmesh.gdelt import GdeltDocClient
 from verdictmesh.history import HistoryRepository
 from verdictmesh.market_data import GammaClient
 from verdictmesh.paper import PaperBroker
@@ -45,9 +49,14 @@ class VerdictMeshService:
         self.settings = settings
         self.gamma = GammaClient(settings.gamma_api_url)
         self.clob = ClobClient(settings.clob_api_url)
+        self.gdelt = GdeltDocClient(settings.gdelt_api_url)
         self.audit = AuditRepository(settings.database_url, echo=settings.database_echo)
         self.history = HistoryRepository(settings.database_url, echo=settings.database_echo)
         self.forecasts = ForecastRepository(
+            settings.database_url,
+            echo=settings.database_echo,
+        )
+        self.evidence_store = EvidenceRepository(
             settings.database_url,
             echo=settings.database_echo,
         )
@@ -55,6 +64,7 @@ class VerdictMeshService:
             self.audit.create_schema()
             self.history.create_schema()
             self.forecasts.create_schema()
+            self.evidence_store.create_schema()
 
         state = self.audit.initialize_portfolio(settings.paper_starting_cash)
         self.paper = PaperBroker.restore(
@@ -74,6 +84,14 @@ class VerdictMeshService:
                 max_daily_loss_fraction=settings.max_daily_loss_fraction,
                 live_trading_enabled=settings.live_trading_enabled,
             )
+        )
+        self.evidence_collector = EvidenceCollector(
+            self.gdelt,
+            max_records=settings.evidence_search_max_records,
+            timespan=settings.evidence_search_timespan,
+            max_items=settings.evidence_max_items,
+            min_items=settings.evidence_min_items,
+            query_max_terms=settings.evidence_query_max_terms,
         )
         self.council_thresholds = CouncilThresholds(
             min_agents=settings.forecast_min_agents,
@@ -117,11 +135,13 @@ class VerdictMeshService:
             self._scanner_task = None
         await self.gamma.close()
         await self.clob.close()
+        await self.gdelt.close()
         if self.anthropic is not None:
             await self.anthropic.close()
         self.audit.close()
         self.history.close()
         self.forecasts.close()
+        self.evidence_store.close()
 
     async def scan_markets(self, limit: int | None = None) -> list[MarketSnapshot]:
         snapshots = await self.gamma.list_market_snapshots(
@@ -208,6 +228,36 @@ class VerdictMeshService:
             return None
         return estimate_fill(book, action, amount)
 
+    async def collect_evidence(
+        self,
+        request: EvidenceCollectionRequest,
+    ) -> EvidenceCollectionResult:
+        result = await self.evidence_collector.collect(request)
+        await asyncio.to_thread(self.evidence_store.record, request, result.package)
+        return result
+
+    async def collect_forecast_request(
+        self,
+        request: EvidenceCollectionRequest,
+    ) -> tuple[EvidenceCollectionResult, ForecastRequest | None]:
+        result = await self.collect_evidence(request)
+        if not result.forecast_ready:
+            return result, None
+        return result, package_to_forecast_request(request, result.package)
+
+    async def run_autonomous_forecast(
+        self,
+        request: EvidenceCollectionRequest,
+    ) -> tuple[EvidenceCollectionResult, CouncilForecast | None]:
+        evidence_result, forecast_request = await self.collect_forecast_request(request)
+        if forecast_request is None:
+            return evidence_result, None
+        forecast = await self.run_forecast(forecast_request)
+        return evidence_result, forecast
+
+    def recent_evidence_packages(self, limit: int = 100) -> list[EvidencePackage]:
+        return self.evidence_store.recent(limit)
+
     def aggregate_forecast(
         self,
         request: ForecastRequest,
@@ -282,6 +332,7 @@ class VerdictMeshService:
         counts = self.audit.counts()
         counts["order_book_snapshots"] = self.history.count()
         counts["forecast_runs"] = self.forecasts.count()
+        counts["evidence_packages"] = self.evidence_store.count()
         return counts
 
     async def _scanner_loop(self) -> None:
