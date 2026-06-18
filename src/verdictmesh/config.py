@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     trading_mode: str = "paper"
     live_trading_enabled: bool = False
 
+    database_url: str = "sqlite+pysqlite:///./verdictmesh.db"
+    database_echo: bool = False
+    database_auto_create: bool = True
+
     gamma_api_url: str = "https://gamma-api.polymarket.com"
     market_scan_limit: int = Field(default=100, ge=1, le=500)
 
