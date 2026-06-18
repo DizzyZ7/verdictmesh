@@ -18,8 +18,9 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install --upgrade pip
-      - run: pip install -e ".[dev]"
+      - run: pip install "ruff>=0.9,<1"
       - run: ruff check .
+      - run: pip install -e ".[dev]"
       - run: mypy src
       - run: pytest
       - run: DATABASE_URL=sqlite+pysqlite:///./migration-test.db alembic upgrade head

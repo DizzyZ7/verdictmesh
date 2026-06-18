@@ -3,6 +3,7 @@ import logging
 from contextlib import suppress
 from threading import RLock
 
+from verdictmesh.anthropic_client import AnthropicForecastClient
 from verdictmesh.backtest import estimate_fill
 from verdictmesh.clob import ClobClient
 from verdictmesh.config import Settings
@@ -21,6 +22,16 @@ from verdictmesh.domain import (
     TradeProposal,
     TradingMode,
 )
+from verdictmesh.forecast import CouncilThresholds, ForecastCouncil
+from verdictmesh.forecast import (
+    aggregate_forecasts as aggregate_council_forecasts,
+)
+from verdictmesh.forecast_models import (
+    AgentForecast,
+    CouncilForecast,
+    ForecastRequest,
+)
+from verdictmesh.forecast_store import ForecastRepository
 from verdictmesh.history import HistoryRepository
 from verdictmesh.market_data import GammaClient
 from verdictmesh.paper import PaperBroker
@@ -36,9 +47,15 @@ class VerdictMeshService:
         self.clob = ClobClient(settings.clob_api_url)
         self.audit = AuditRepository(settings.database_url, echo=settings.database_echo)
         self.history = HistoryRepository(settings.database_url, echo=settings.database_echo)
+        self.forecasts = ForecastRepository(
+            settings.database_url,
+            echo=settings.database_echo,
+        )
         if settings.database_auto_create:
             self.audit.create_schema()
             self.history.create_schema()
+            self.forecasts.create_schema()
+
         state = self.audit.initialize_portfolio(settings.paper_starting_cash)
         self.paper = PaperBroker.restore(
             starting_cash=state.starting_cash,
@@ -58,6 +75,30 @@ class VerdictMeshService:
                 live_trading_enabled=settings.live_trading_enabled,
             )
         )
+        self.council_thresholds = CouncilThresholds(
+            min_agents=settings.forecast_min_agents,
+            min_evidence=settings.forecast_min_evidence,
+            min_coverage=settings.forecast_min_coverage,
+            min_evidence_quality=settings.forecast_min_evidence_quality,
+            min_confidence=settings.forecast_min_confidence,
+            max_disagreement=settings.forecast_max_disagreement,
+            min_resolution_clarity=settings.forecast_min_resolution_clarity,
+            min_actionable_edge=settings.forecast_min_actionable_edge,
+        )
+        self.anthropic: AnthropicForecastClient | None = None
+        self.forecast_council: ForecastCouncil | None = None
+        if settings.anthropic_api_key:
+            self.anthropic = AnthropicForecastClient(
+                api_key=settings.anthropic_api_key,
+                model=settings.forecast_model,
+                base_url=settings.anthropic_api_url,
+                max_tokens=settings.forecast_max_tokens,
+            )
+            self.forecast_council = ForecastCouncil(
+                self.anthropic,
+                self.council_thresholds,
+            )
+
         self._paper_lock = RLock()
         self._scanner_task: asyncio.Task[None] | None = None
 
@@ -76,8 +117,11 @@ class VerdictMeshService:
             self._scanner_task = None
         await self.gamma.close()
         await self.clob.close()
+        if self.anthropic is not None:
+            await self.anthropic.close()
         self.audit.close()
         self.history.close()
+        self.forecasts.close()
 
     async def scan_markets(self, limit: int | None = None) -> list[MarketSnapshot]:
         snapshots = await self.gamma.list_market_snapshots(
@@ -164,6 +208,29 @@ class VerdictMeshService:
             return None
         return estimate_fill(book, action, amount)
 
+    def aggregate_forecast(
+        self,
+        request: ForecastRequest,
+        agents: list[AgentForecast],
+    ) -> CouncilForecast:
+        forecast = aggregate_council_forecasts(
+            request,
+            agents,
+            self.council_thresholds,
+        )
+        self.forecasts.record(request, forecast)
+        return forecast
+
+    async def run_forecast(self, request: ForecastRequest) -> CouncilForecast:
+        if self.forecast_council is None:
+            raise RuntimeError("Anthropic API key is not configured")
+        forecast = await self.forecast_council.run(request)
+        await asyncio.to_thread(self.forecasts.record, request, forecast)
+        return forecast
+
+    def recent_forecasts(self, limit: int = 100) -> list[CouncilForecast]:
+        return self.forecasts.recent(limit)
+
     def evaluate(self, proposal: TradeProposal, context: RiskContext) -> RiskDecision:
         return self.risk.evaluate(proposal, context)
 
@@ -214,6 +281,7 @@ class VerdictMeshService:
     def audit_counts(self) -> dict[str, int]:
         counts = self.audit.counts()
         counts["order_book_snapshots"] = self.history.count()
+        counts["forecast_runs"] = self.forecasts.count()
         return counts
 
     async def _scanner_loop(self) -> None:

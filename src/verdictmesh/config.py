@@ -34,6 +34,19 @@ class Settings(BaseSettings):
     order_book_market_limit: int = Field(default=50, ge=1, le=500)
     order_book_asset_limit: int = Field(default=100, ge=1, le=1_000)
 
+    anthropic_api_key: str | None = None
+    anthropic_api_url: str = "https://api.anthropic.com"
+    forecast_model: str = "claude-sonnet-4-6"
+    forecast_max_tokens: int = Field(default=2500, ge=256, le=64_000)
+    forecast_min_agents: int = Field(default=3, ge=2, le=4)
+    forecast_min_evidence: int = Field(default=2, ge=1, le=100)
+    forecast_min_coverage: float = Field(default=0.50, ge=0, le=1)
+    forecast_min_evidence_quality: float = Field(default=0.55, ge=0, le=1)
+    forecast_min_confidence: float = Field(default=0.65, ge=0, le=1)
+    forecast_max_disagreement: float = Field(default=0.15, ge=0, le=1)
+    forecast_min_resolution_clarity: float = Field(default=0.75, ge=0, le=1)
+    forecast_min_actionable_edge: float = Field(default=0.07, ge=0, le=1)
+
     paper_starting_cash: float = Field(default=10_000.0, gt=0)
     min_net_edge: float = Field(default=0.07, ge=0, le=1)
     min_confidence: float = Field(default=0.70, ge=0, le=1)
@@ -42,8 +55,6 @@ class Settings(BaseSettings):
     max_position_fraction: float = Field(default=0.01, gt=0, le=1)
     max_total_exposure_fraction: float = Field(default=0.10, gt=0, le=1)
     max_daily_loss_fraction: float = Field(default=0.02, gt=0, le=1)
-
-    anthropic_api_key: str | None = None
 
 
 @lru_cache
