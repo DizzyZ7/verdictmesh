@@ -1,0 +1,3 @@
+# Collector configuration
+
+The source collector is configured through `GDELT_API_URL`, `EVIDENCE_SEARCH_TIMESPAN`, `EVIDENCE_SEARCH_MAX_RECORDS`, `EVIDENCE_MAX_ITEMS`, `EVIDENCE_MIN_ITEMS`, and `EVIDENCE_QUERY_MAX_TERMS`.
