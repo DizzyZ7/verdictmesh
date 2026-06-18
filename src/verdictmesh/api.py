@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from verdictmesh.config import Settings, get_settings
 from verdictmesh.domain import (
+    DecisionAudit,
     MarketSnapshot,
     PaperOrder,
     RiskContext,
@@ -39,7 +40,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     return FastAPI(
         title="VerdictMesh API",
-        version="0.1.0",
+        version="0.2.0",
         description="Prediction-market intelligence and risk platform",
         lifespan=lifespan,
     )
@@ -57,13 +58,17 @@ SettingsDependency = Annotated[Settings, Depends(get_settings)]
 
 
 @app.get("/health")
-def health(settings: SettingsDependency) -> dict[str, object]:
+def health(
+    settings: SettingsDependency,
+    service: ServiceDependency,
+) -> dict[str, object]:
     return {
         "status": "ok",
         "service": settings.app_name,
         "environment": settings.app_env,
         "trading_mode": settings.trading_mode,
         "live_trading_enabled": settings.live_trading_enabled,
+        "audit": service.audit_counts(),
     }
 
 
@@ -84,7 +89,7 @@ def evaluate_risk(
     context: RiskContext,
     service: ServiceDependency,
 ) -> RiskDecision:
-    return service.evaluate(proposal, context)
+    return service.evaluate_and_record(proposal, context)
 
 
 @app.post("/paper/orders", response_model=PaperOrderResponse)
@@ -102,3 +107,11 @@ def submit_paper_order(
 @app.get("/paper/portfolio")
 def paper_portfolio(service: ServiceDependency) -> dict[str, object]:
     return service.paper.snapshot()
+
+
+@app.get("/audit/decisions")
+def audit_decisions(
+    service: ServiceDependency,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> list[DecisionAudit]:
+    return service.recent_decisions(limit)
