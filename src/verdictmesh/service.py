@@ -22,9 +22,8 @@ from verdictmesh.domain import (
     TradeProposal,
     TradingMode,
 )
+from verdictmesh.forecast import CouncilThresholds, ForecastCouncil
 from verdictmesh.forecast import (
-    CouncilThresholds,
-    ForecastCouncil,
     aggregate_forecasts as aggregate_council_forecasts,
 )
 from verdictmesh.forecast_models import (
