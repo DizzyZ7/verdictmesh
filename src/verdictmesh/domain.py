@@ -21,6 +21,16 @@ class ResolutionRisk(StrEnum):
     HIGH = "high"
 
 
+class Outcome(StrEnum):
+    YES = "YES"
+    NO = "NO"
+
+
+class OrderAction(StrEnum):
+    BUY = "BUY"
+    SELL = "SELL"
+
+
 class MarketSnapshot(BaseModel):
     market_id: str
     question: str
@@ -34,6 +44,76 @@ class MarketSnapshot(BaseModel):
     volume_24h_usd: float = Field(default=0, ge=0)
     active: bool = True
     closed: bool = False
+
+
+class OrderBookLevel(BaseModel):
+    price: float = Field(gt=0, lt=1)
+    size: float = Field(ge=0)
+
+
+class OrderBookSnapshot(BaseModel):
+    app_market_id: str | None = None
+    condition_id: str
+    asset_id: str
+    outcome: Outcome | None = None
+    source_timestamp: str | None = None
+    book_hash: str
+    bids: list[OrderBookLevel] = Field(default_factory=list)
+    asks: list[OrderBookLevel] = Field(default_factory=list)
+    min_order_size: float | None = Field(default=None, ge=0)
+    tick_size: float | None = Field(default=None, gt=0, le=1)
+    neg_risk: bool = False
+    fetched_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @property
+    def best_bid(self) -> float | None:
+        return max((level.price for level in self.bids), default=None)
+
+    @property
+    def best_ask(self) -> float | None:
+        return min((level.price for level in self.asks), default=None)
+
+    @property
+    def midpoint(self) -> float | None:
+        if self.best_bid is None or self.best_ask is None:
+            return None
+        return (self.best_bid + self.best_ask) / 2
+
+    @property
+    def spread(self) -> float | None:
+        if self.best_bid is None or self.best_ask is None:
+            return None
+        return self.best_ask - self.best_bid
+
+    @property
+    def bid_notional(self) -> float:
+        return sum(level.price * level.size for level in self.bids)
+
+    @property
+    def ask_notional(self) -> float:
+        return sum(level.price * level.size for level in self.asks)
+
+
+class FillEstimate(BaseModel):
+    action: OrderAction
+    requested_amount: float = Field(gt=0)
+    filled_amount: float = Field(ge=0)
+    unfilled_amount: float = Field(ge=0)
+    quantity: float = Field(ge=0)
+    notional: float = Field(ge=0)
+    average_price: float | None = Field(default=None, gt=0, lt=1)
+    worst_price: float | None = Field(default=None, gt=0, lt=1)
+    reference_price: float | None = Field(default=None, gt=0, lt=1)
+    slippage: float | None = Field(default=None, ge=0)
+    fully_filled: bool
+
+
+class OrderBookScanResult(BaseModel):
+    markets_scanned: int = Field(ge=0)
+    assets_requested: int = Field(ge=0)
+    snapshots_fetched: int = Field(ge=0)
+    snapshots_inserted: int = Field(ge=0)
+    failures: int = Field(ge=0)
 
 
 class TradeProposal(BaseModel):
