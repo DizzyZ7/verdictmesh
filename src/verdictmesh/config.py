@@ -26,7 +26,13 @@ class Settings(BaseSettings):
     database_auto_create: bool = True
 
     gamma_api_url: str = "https://gamma-api.polymarket.com"
+    clob_api_url: str = "https://clob.polymarket.com"
     market_scan_limit: int = Field(default=100, ge=1, le=500)
+    order_book_scanner_enabled: bool = False
+    order_book_scan_interval_seconds: int = Field(default=60, ge=10, le=86_400)
+    order_book_scan_concurrency: int = Field(default=10, ge=1, le=50)
+    order_book_market_limit: int = Field(default=50, ge=1, le=500)
+    order_book_asset_limit: int = Field(default=100, ge=1, le=1_000)
 
     paper_starting_cash: float = Field(default=10_000.0, gt=0)
     min_net_edge: float = Field(default=0.07, ge=0, le=1)
