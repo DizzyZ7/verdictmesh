@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     order_book_market_limit: int = Field(default=50, ge=1, le=500)
     order_book_asset_limit: int = Field(default=100, ge=1, le=1_000)
 
+    gdelt_api_url: str = "https://api.gdeltproject.org"
+    evidence_search_timespan: str = "1week"
+    evidence_search_max_records: int = Field(default=75, ge=1, le=250)
+    evidence_max_items: int = Field(default=8, ge=1, le=50)
+    evidence_min_items: int = Field(default=2, ge=1, le=20)
+    evidence_query_max_terms: int = Field(default=8, ge=1, le=20)
+
     anthropic_api_key: str | None = None
     anthropic_api_url: str = "https://api.anthropic.com"
     forecast_model: str = "claude-sonnet-4-6"
