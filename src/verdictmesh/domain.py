@@ -102,3 +102,15 @@ class PaperPosition(BaseModel):
         if abs(expected - self.cost_basis) > 1e-6:
             raise ValueError("cost_basis must equal quantity * average_price")
         return self
+
+
+class DecisionAudit(BaseModel):
+    decision_id: str
+    market_id: str
+    side: Side
+    approved: bool
+    reasons: list[str]
+    raw_edge: float
+    net_edge: float
+    approved_stake: float
+    created_at: datetime
