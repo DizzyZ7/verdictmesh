@@ -31,6 +31,9 @@ class CouncilThresholds:
     min_actionable_edge: float = 0.07
 
 
+DEFAULT_COUNCIL_THRESHOLDS = CouncilThresholds()
+
+
 class ForecastAgentClient(Protocol):
     async def analyze(
         self,
@@ -42,7 +45,7 @@ class ForecastAgentClient(Protocol):
 def aggregate_forecasts(
     request: ForecastRequest,
     agents: list[AgentForecast],
-    thresholds: CouncilThresholds = CouncilThresholds(),
+    thresholds: CouncilThresholds = DEFAULT_COUNCIL_THRESHOLDS,
 ) -> CouncilForecast:
     if not agents:
         raise ValueError("at least one agent forecast is required")
