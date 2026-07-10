@@ -1,13 +1,18 @@
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 import httpx
 
 type Sleep = Callable[[float], Awaitable[None]]
-type QueryParams = dict[str, str | int | float | bool]
+type PrimitiveParam = str | int | float | bool | None
+type QueryParams = Mapping[str, PrimitiveParam | Sequence[PrimitiveParam]]
 
 _DEFAULT_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+
+async def _default_sleep(delay: float) -> None:
+    await asyncio.sleep(delay)
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +44,7 @@ async def get_with_retry(
     *,
     params: QueryParams | None = None,
     policy: RetryPolicy | None = None,
-    sleep: Sleep = asyncio.sleep,
+    sleep: Sleep = _default_sleep,
 ) -> httpx.Response:
     """Execute an idempotent GET with bounded retries for transient failures."""
     resolved_policy = policy or RetryPolicy()
