@@ -17,6 +17,10 @@ def make_app(settings: Settings) -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/ready")
+    def ready() -> dict[str, str]:
+        return {"status": "ready"}
+
     @app.get("/private")
     def private() -> dict[str, str]:
         return {"status": "protected"}
@@ -60,11 +64,12 @@ def test_protected_route_accepts_configured_key_and_preserves_request_id() -> No
     assert response.headers["x-request-id"] == "test-request-id"
 
 
-def test_health_and_docs_remain_public() -> None:
+def test_health_readiness_and_docs_remain_public() -> None:
     settings = Settings(app_env="test", operator_api_key=VALID_KEY)
     client = TestClient(make_app(settings))
 
     assert client.get("/health").status_code == 200
+    assert client.get("/ready").status_code == 200
     assert client.get("/docs").status_code == 200
     assert client.get("/openapi.json").status_code == 200
 

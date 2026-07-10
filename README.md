@@ -12,45 +12,48 @@ VerdictMesh — автономная платформа для исследов�
 
 Уже реализовано:
 
-- FastAPI API;
+- FastAPI API с операторской API-key авторизацией;
 - получение активных рынков через Polymarket Gamma API;
 - автономный polling публичных CLOB-стаканов;
 - сохранение полной глубины bids/asks и hash состояния;
 - расчет best bid, best ask, midpoint, spread и доступного notional;
 - симуляция BUY/SELL по глубине стакана с учетом slippage и неполного исполнения;
+- автономный сбор и ранжирование evidence через GDELT DOC API;
 - evidence-grounded council из четырех независимых Claude-ролей;
 - schema-constrained JSON для всех ответов моделей;
 - детерминированный consensus с disagreement, confidence interval и evidence coverage;
 - fail-closed запреты при слабых источниках, высокой неопределенности или неясных правилах;
 - детерминированный риск-модуль;
 - paper-брокер и учет позиций;
-- PostgreSQL-аудит рынков, прогнозов, решений, стаканов и виртуальных ордеров;
+- PostgreSQL-аудит рынков, evidence, прогнозов, решений, стаканов и виртуальных ордеров;
 - восстановление paper-портфеля после перезапуска;
-- идемпотентное сохранение неизменившихся снимков;
+- liveness и readiness probes;
+- Prometheus-совместимые HTTP и runtime-метрики;
+- JSON-логи с request ID, route template, статусом и latency;
 - Alembic-миграции;
-- Docker Compose;
+- non-root Docker image с healthcheck;
 - тесты, lint, строгая типизация и GitHub Actions CI.
 
 ## Архитектура
 
 ```text
-Gamma API + CLOB orderbooks + внешние источники
-                        ↓
-             сбор и нормализация
-                        ↓
-            историческое хранилище
-                        ↓
-            фильтрация кандидатов
-                        ↓
- researcher + domain expert + skeptic + resolution auditor
-                        ↓
-      deterministic probability consensus
-                        ↓
-        детерминированный risk engine
-                        ↓
-       paper broker / execution adapter
-                        ↓
-       PostgreSQL audit + monitoring
+Gamma API + CLOB orderbooks + GDELT / внешние источники
+                              ↓
+                   сбор и нормализация
+                              ↓
+                  историческое хранилище
+                              ↓
+                  фильтрация кандидатов
+                              ↓
+       researcher + domain expert + skeptic + resolution auditor
+                              ↓
+            deterministic probability consensus
+                              ↓
+              детерминированный risk engine
+                              ↓
+             paper broker / execution adapter
+                              ↓
+        PostgreSQL audit + metrics + structured logs
 ```
 
 Языковая модель не получает доступ к приватным ключам и не может обойти consensus или risk engine.
@@ -67,10 +70,28 @@ docker compose up --build
 - API: `http://localhost:8000`
 - Swagger: `http://localhost:8000/docs`
 - OpenAPI: `http://localhost:8000/openapi.json`
+- liveness: `http://localhost:8000/health`
+- readiness: `http://localhost:8000/ready`
 
 Контейнер API автоматически применяет Alembic-миграции. При `ORDER_BOOK_SCANNER_ENABLED=true` исторический сбор начинается автоматически после запуска.
 
 Для реального вызова forecast council добавь `ANTHROPIC_API_KEY` в `.env`. Детерминированный endpoint `/forecast/consensus` работает без внешнего API и полезен для тестирования схем и aggregation logic.
+
+## Операторская авторизация
+
+При наличии `OPERATOR_API_KEY` все рабочие маршруты требуют заголовок `X-API-Key`. Публичными остаются `/health`, `/ready`, `/docs`, `/redoc` и `/openapi.json`.
+
+```env
+APP_ENV=production
+OPERATOR_API_KEY=<случайный секрет длиной не менее 32 символов>
+OPERATOR_API_KEY_HEADER=X-API-Key
+```
+
+```bash
+curl -H "X-API-Key: $OPERATOR_API_KEY" http://localhost:8000/markets
+```
+
+`production` и `staging` завершаются fail-fast, если операторский ключ не задан.
 
 ## Локальная разработка
 
@@ -100,12 +121,17 @@ uvicorn verdictmesh.api:app --reload
 
 ```text
 GET  /health
+GET  /ready
+GET  /metrics
 GET  /markets
 POST /scanner/orderbooks
 GET  /history/orderbooks/{asset_id}
 POST /backtest/fill
+POST /evidence/collect
+GET  /evidence/packages
 POST /forecast/consensus
 POST /forecast/run
+POST /forecast/auto
 GET  /forecast/runs
 POST /risk/evaluate
 POST /paper/orders
@@ -114,6 +140,33 @@ GET  /audit/decisions
 ```
 
 Для `POST /backtest/fill` поле `amount` означает сумму USDC при `BUY` и количество outcome-токенов при `SELL`.
+
+## Health и observability
+
+`GET /health` — только liveness. Он не обращается к PostgreSQL и подтверждает, что процесс способен отвечать по HTTP.
+
+`GET /ready` — readiness. Он проверяет доступ к базе и состояние обязательного фонового CLOB-сканера. При неготовности возвращается HTTP 503.
+
+`GET /metrics` — Prometheus text format. Endpoint защищается операторским ключом, когда авторизация включена. Метрики включают:
+
+- количество HTTP-запросов по method, route template и status;
+- суммарную длительность и количество измеренных запросов;
+- число запросов in-flight;
+- время запуска процесса;
+- состояние CLOB-сканера;
+- число ошибок фонового сканера;
+- timestamp последнего успешного цикла.
+
+Динамические значения URL не используются как labels: например, все запросы истории агрегируются под `/history/orderbooks/{asset_id}`.
+
+Логи настраиваются через:
+
+```env
+LOG_LEVEL=INFO
+LOG_FORMAT=json
+```
+
+JSON-лог HTTP-запроса содержит `request_id`, `method`, `route`, `status_code`, `duration_ms` и адрес клиента. Для локальной разработки можно использовать `LOG_FORMAT=text`.
 
 ## Forecast council
 
@@ -154,8 +207,6 @@ Live trading:                выключен
 
 ## Исторический scanner
 
-Настройки:
-
 ```text
 ORDER_BOOK_SCANNER_ENABLED=true
 ORDER_BOOK_SCAN_INTERVAL_SECONDS=60
@@ -191,14 +242,15 @@ mypy src
 pytest
 DATABASE_URL=sqlite+pysqlite:///./migration-test.db alembic upgrade head
 DATABASE_URL=sqlite+pysqlite:///./migration-test.db alembic downgrade base
+docker build -t verdictmesh:local .
 ```
 
 ## Следующие этапы
 
-1. Автономный collector первичных источников и deduplication evidence.
-2. WebSocket-поток CLOB и восстановление стакана по incremental updates.
-3. Replay engine с latency, fees, spread и разрешением рынка.
-4. Калибровка вероятностей, Brier Score и attribution стратегий.
+1. WebSocket-поток CLOB и восстановление стакана по incremental updates.
+2. Replay engine с latency, fees, spread и разрешением рынка.
+3. Калибровка вероятностей, Brier Score и attribution стратегий.
+4. Retention policy и архивирование исторических данных.
 5. Веб-панель и операционные уведомления.
 6. Изолированный исполнитель с обязательной проверкой geoblock.
 
