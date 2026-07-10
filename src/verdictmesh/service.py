@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from contextlib import suppress
+from datetime import UTC, datetime
 from threading import RLock
 
 from verdictmesh.anthropic_client import AnthropicForecastClient
@@ -119,6 +120,9 @@ class VerdictMeshService:
 
         self._paper_lock = RLock()
         self._scanner_task: asyncio.Task[None] | None = None
+        self._scanner_last_success_at: datetime | None = None
+        self._scanner_failures = 0
+        self._scanner_last_error: str | None = None
 
     async def start(self) -> None:
         if self.settings.order_book_scanner_enabled and self._scanner_task is None:
@@ -335,13 +339,64 @@ class VerdictMeshService:
         counts["evidence_packages"] = self.evidence_store.count()
         return counts
 
+    async def readiness(self) -> dict[str, object]:
+        scanner = self.scanner_status()
+        try:
+            await asyncio.to_thread(self.audit.counts)
+        except Exception as exc:
+            logger.exception("Database readiness check failed")
+            return {
+                "status": "not_ready",
+                "database": "unavailable",
+                "scanner": scanner,
+                "error": type(exc).__name__,
+            }
+
+        scanner_ready = not self.settings.order_book_scanner_enabled or bool(scanner["running"])
+        return {
+            "status": "ready" if scanner_ready else "not_ready",
+            "database": "ok",
+            "scanner": scanner,
+        }
+
+    def scanner_status(self) -> dict[str, object]:
+        task = self._scanner_task
+        running = task is not None and not task.done()
+        return {
+            "enabled": self.settings.order_book_scanner_enabled,
+            "running": running,
+            "last_success_at": (
+                self._scanner_last_success_at.isoformat()
+                if self._scanner_last_success_at is not None
+                else None
+            ),
+            "failures": self._scanner_failures,
+            "last_error": self._scanner_last_error,
+        }
+
+    def operational_metrics(self) -> dict[str, float]:
+        scanner = self.scanner_status()
+        last_success = self._scanner_last_success_at
+        return {
+            "verdictmesh_orderbook_scanner_enabled": float(bool(scanner["enabled"])),
+            "verdictmesh_orderbook_scanner_running": float(bool(scanner["running"])),
+            "verdictmesh_orderbook_scanner_failures_total": float(self._scanner_failures),
+            "verdictmesh_orderbook_scanner_last_success_timestamp_seconds": (
+                last_success.timestamp() if last_success is not None else 0.0
+            ),
+        }
+
     async def _scanner_loop(self) -> None:
         while True:
             try:
                 result = await self.scan_order_books()
+                self._scanner_last_success_at = datetime.now(UTC)
+                self._scanner_last_error = None
                 logger.info("Orderbook scan completed: %s", result.model_dump())
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
+                self._scanner_failures += 1
+                self._scanner_last_error = type(exc).__name__
                 logger.exception("Autonomous orderbook scan failed")
             await asyncio.sleep(self.settings.order_book_scan_interval_seconds)
