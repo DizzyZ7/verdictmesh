@@ -2,7 +2,9 @@ from typing import Any
 
 import httpx
 
+from verdictmesh import __version__
 from verdictmesh.domain import OrderBookLevel, OrderBookSnapshot
+from verdictmesh.http_client import RetryPolicy, get_with_retry
 
 
 def _to_float(value: Any, default: float | None = None) -> float | None:
@@ -36,11 +38,13 @@ class ClobClient:
         base_url: str,
         timeout_seconds: float = 15.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        retry_policy: RetryPolicy | None = None,
     ) -> None:
+        self._retry_policy = retry_policy or RetryPolicy()
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             timeout=httpx.Timeout(timeout_seconds),
-            headers={"User-Agent": "VerdictMesh/0.3"},
+            headers={"User-Agent": f"VerdictMesh/{__version__}"},
             transport=transport,
         )
 
@@ -48,7 +52,12 @@ class ClobClient:
         await self._client.aclose()
 
     async def get_order_book(self, asset_id: str) -> OrderBookSnapshot:
-        response = await self._client.get("/book", params={"token_id": asset_id})
+        response = await get_with_retry(
+            self._client,
+            "/book",
+            params={"token_id": asset_id},
+            policy=self._retry_policy,
+        )
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict):
