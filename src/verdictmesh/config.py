@@ -1,6 +1,7 @@
 from functools import lru_cache
+from typing import Self
 
-from pydantic import Field
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,6 +18,14 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8000
     log_level: str = "INFO"
+
+    operator_api_key: SecretStr | None = None
+    operator_api_key_header: str = Field(
+        default="X-API-Key",
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9-]+$",
+    )
 
     trading_mode: str = "paper"
     live_trading_enabled: bool = False
@@ -62,6 +71,31 @@ class Settings(BaseSettings):
     max_position_fraction: float = Field(default=0.01, gt=0, le=1)
     max_total_exposure_fraction: float = Field(default=0.10, gt=0, le=1)
     max_daily_loss_fraction: float = Field(default=0.02, gt=0, le=1)
+
+    @field_validator("operator_api_key", mode="before")
+    @classmethod
+    def normalize_operator_api_key(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    @model_validator(mode="after")
+    def validate_operator_auth(self) -> Self:
+        environment = self.app_env.strip().lower()
+        if self.operator_api_key is not None:
+            key_length = len(self.operator_api_key.get_secret_value())
+            if key_length < 32:
+                raise ValueError("OPERATOR_API_KEY must contain at least 32 characters")
+        if environment in {"production", "staging"} and self.operator_api_key is None:
+            raise ValueError(
+                "OPERATOR_API_KEY is required when APP_ENV is production or staging"
+            )
+        return self
+
+    @property
+    def operator_auth_enabled(self) -> bool:
+        return self.operator_api_key is not None
 
 
 @lru_cache
