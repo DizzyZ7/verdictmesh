@@ -35,14 +35,8 @@ class Settings(BaseSettings):
     database_echo: bool = False
     database_auto_create: bool = True
 
-    upstream_retry_attempts: int = Field(default=3, ge=1, le=5)
-    upstream_retry_base_delay_seconds: float = Field(default=0.25, ge=0, le=5)
-    upstream_retry_max_delay_seconds: float = Field(default=2.0, ge=0, le=30)
-
     gamma_api_url: str = "https://gamma-api.polymarket.com"
-    gamma_timeout_seconds: float = Field(default=15.0, gt=0, le=120)
     clob_api_url: str = "https://clob.polymarket.com"
-    clob_timeout_seconds: float = Field(default=15.0, gt=0, le=120)
     market_scan_limit: int = Field(default=100, ge=1, le=500)
     order_book_scanner_enabled: bool = False
     order_book_scan_interval_seconds: int = Field(default=60, ge=10, le=86_400)
@@ -51,7 +45,6 @@ class Settings(BaseSettings):
     order_book_asset_limit: int = Field(default=100, ge=1, le=1_000)
 
     gdelt_api_url: str = "https://api.gdeltproject.org"
-    gdelt_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
     evidence_search_timespan: str = "1week"
     evidence_search_max_records: int = Field(default=75, ge=1, le=250)
     evidence_max_items: int = Field(default=8, ge=1, le=50)
@@ -60,7 +53,6 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str | None = None
     anthropic_api_url: str = "https://api.anthropic.com"
-    anthropic_timeout_seconds: float = Field(default=90.0, gt=0, le=300)
     forecast_model: str = "claude-sonnet-4-6"
     forecast_max_tokens: int = Field(default=2500, ge=256, le=64_000)
     forecast_min_agents: int = Field(default=3, ge=2, le=4)
@@ -99,10 +91,6 @@ class Settings(BaseSettings):
         if environment in {"production", "staging"} and self.operator_api_key is None:
             raise ValueError(
                 "OPERATOR_API_KEY is required when APP_ENV is production or staging"
-            )
-        if self.upstream_retry_max_delay_seconds < self.upstream_retry_base_delay_seconds:
-            raise ValueError(
-                "UPSTREAM_RETRY_MAX_DELAY_SECONDS must be greater than or equal to base delay"
             )
         return self
 
