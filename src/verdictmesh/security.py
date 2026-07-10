@@ -9,7 +9,7 @@ from verdictmesh.config import Settings
 
 type CallNext = Callable[[Request], Awaitable[Response]]
 
-_PUBLIC_PATHS = frozenset({"/health", "/openapi.json"})
+_PUBLIC_PATHS = frozenset({"/health", "/ready", "/openapi.json"})
 _PUBLIC_PREFIXES = ("/docs", "/redoc")
 
 
