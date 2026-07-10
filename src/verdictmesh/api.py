@@ -28,6 +28,7 @@ from verdictmesh.forecast_models import (
     CouncilForecast,
     ForecastRequest,
 )
+from verdictmesh.security import install_security_middleware
 from verdictmesh.service import VerdictMeshService
 
 
@@ -54,7 +55,7 @@ class AutonomousForecastResponse(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    settings = get_settings()
+    settings = cast(Settings, app.state.settings)
     app.state.service = VerdictMeshService(settings)
     await app.state.service.start()
     try:
@@ -64,12 +65,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
-    return FastAPI(
+    resolved_settings = get_settings()
+    application = FastAPI(
         title="VerdictMesh API",
         version="0.5.0",
         description="Prediction-market intelligence and risk platform",
         lifespan=lifespan,
     )
+    application.state.settings = resolved_settings
+    install_security_middleware(application, resolved_settings)
+    return application
 
 
 app = create_app()
@@ -79,8 +84,12 @@ def get_service(request: Request) -> VerdictMeshService:
     return cast(VerdictMeshService, request.app.state.service)
 
 
+def get_app_settings(request: Request) -> Settings:
+    return cast(Settings, request.app.state.settings)
+
+
 ServiceDependency = Annotated[VerdictMeshService, Depends(get_service)]
-SettingsDependency = Annotated[Settings, Depends(get_settings)]
+SettingsDependency = Annotated[Settings, Depends(get_app_settings)]
 
 
 @app.get("/health")
@@ -92,6 +101,7 @@ def health(
         "status": "ok",
         "service": settings.app_name,
         "environment": settings.app_env,
+        "operator_auth_enabled": settings.operator_auth_enabled,
         "trading_mode": settings.trading_mode,
         "live_trading_enabled": settings.live_trading_enabled,
         "order_book_scanner_enabled": settings.order_book_scanner_enabled,
