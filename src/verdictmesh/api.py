@@ -4,7 +4,9 @@ from typing import Annotated, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+from starlette.responses import JSONResponse, PlainTextResponse
 
+from verdictmesh import __version__
 from verdictmesh.config import Settings, get_settings
 from verdictmesh.domain import (
     DecisionAudit,
@@ -27,6 +29,11 @@ from verdictmesh.forecast_models import (
     ConsensusRequest,
     CouncilForecast,
     ForecastRequest,
+)
+from verdictmesh.observability import (
+    MetricsRegistry,
+    configure_logging,
+    install_observability_middleware,
 )
 from verdictmesh.security import install_security_middleware
 from verdictmesh.service import VerdictMeshService
@@ -66,14 +73,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     resolved_settings = get_settings()
+    configure_logging(resolved_settings.log_level, resolved_settings.log_format)
+    metrics = MetricsRegistry()
     application = FastAPI(
         title="VerdictMesh API",
-        version="0.5.0",
+        version=__version__,
         description="Prediction-market intelligence and risk platform",
         lifespan=lifespan,
     )
     application.state.settings = resolved_settings
+    application.state.metrics = metrics
     install_security_middleware(application, resolved_settings)
+    install_observability_middleware(application, metrics)
     return application
 
 
@@ -88,28 +99,47 @@ def get_app_settings(request: Request) -> Settings:
     return cast(Settings, request.app.state.settings)
 
 
+def get_metrics_registry(request: Request) -> MetricsRegistry:
+    return cast(MetricsRegistry, request.app.state.metrics)
+
+
 ServiceDependency = Annotated[VerdictMeshService, Depends(get_service)]
 SettingsDependency = Annotated[Settings, Depends(get_app_settings)]
+MetricsDependency = Annotated[MetricsRegistry, Depends(get_metrics_registry)]
 
 
 @app.get("/health")
-def health(
-    settings: SettingsDependency,
-    service: ServiceDependency,
-) -> dict[str, object]:
+def health(settings: SettingsDependency) -> dict[str, object]:
+    """Liveness probe: confirms that the application process can serve HTTP."""
     return {
         "status": "ok",
         "service": settings.app_name,
+        "version": __version__,
         "environment": settings.app_env,
         "operator_auth_enabled": settings.operator_auth_enabled,
         "trading_mode": settings.trading_mode,
         "live_trading_enabled": settings.live_trading_enabled,
-        "order_book_scanner_enabled": settings.order_book_scanner_enabled,
-        "evidence_provider": "gdelt-doc",
-        "forecast_model": settings.forecast_model,
-        "forecast_api_configured": bool(settings.anthropic_api_key),
-        "audit": service.audit_counts(),
     }
+
+
+@app.get("/ready")
+async def ready(service: ServiceDependency) -> JSONResponse:
+    """Readiness probe: verifies database access and required background workers."""
+    state = await service.readiness()
+    status_code = 200 if state["status"] == "ready" else 503
+    return JSONResponse(status_code=status_code, content=state)
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics(
+    service: ServiceDependency,
+    registry: MetricsDependency,
+) -> PlainTextResponse:
+    payload = registry.render(service.operational_metrics())
+    return PlainTextResponse(
+        payload,
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
 
 
 @app.get("/markets")
