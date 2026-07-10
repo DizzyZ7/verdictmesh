@@ -24,7 +24,13 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip
       - run: pip install "ruff>=0.9,<1"
-      - run: ruff check .
+      - id: ruff
+        run: ruff check . --output-format=concise | tee ruff-report.txt
+      - if: failure() && steps.ruff.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruff-report
+          path: ruff-report.txt
       - run: pip install -e ".[dev]"
       - run: pip check
       - run: mypy src
