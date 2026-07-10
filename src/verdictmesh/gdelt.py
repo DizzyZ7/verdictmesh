@@ -4,7 +4,9 @@ from urllib.parse import urlparse
 
 import httpx
 
+from verdictmesh import __version__
 from verdictmesh.evidence_models import EvidenceSourceCandidate
+from verdictmesh.http_client import RetryPolicy, get_with_retry
 
 GDELT_DOC_PATH = "/".join(("", "api", "v2", "doc", "doc"))
 
@@ -32,12 +34,14 @@ class GdeltDocClient:
         base_url: str,
         timeout_seconds: float = 20.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        retry_policy: RetryPolicy | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
+        self._retry_policy = retry_policy or RetryPolicy()
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=httpx.Timeout(timeout_seconds),
-            headers={"User-Agent": "VerdictMesh/0.5"},
+            headers={"User-Agent": f"VerdictMesh/{__version__}"},
             transport=transport,
         )
 
@@ -52,7 +56,8 @@ class GdeltDocClient:
         timespan: str,
         sort: str = "HybridRel",
     ) -> list[EvidenceSourceCandidate]:
-        response = await self._client.get(
+        response = await get_with_retry(
+            self._client,
             GDELT_DOC_PATH,
             params={
                 "query": query,
@@ -62,6 +67,7 @@ class GdeltDocClient:
                 "timespan": timespan,
                 "sort": sort,
             },
+            policy=self._retry_policy,
         )
         response.raise_for_status()
         payload = response.json()

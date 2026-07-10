@@ -3,6 +3,7 @@ from typing import Any
 
 import httpx
 
+from verdictmesh import __version__
 from verdictmesh.forecast_models import (
     AgentAnalysis,
     AgentForecast,
@@ -52,7 +53,7 @@ class AnthropicForecastClient:
                 "x-api-key": api_key,
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
-                "user-agent": "VerdictMesh/0.4",
+                "user-agent": f"VerdictMesh/{__version__}",
             },
             transport=transport,
         )

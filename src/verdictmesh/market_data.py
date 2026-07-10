@@ -4,7 +4,9 @@ from typing import Any
 
 import httpx
 
+from verdictmesh import __version__
 from verdictmesh.domain import MarketSnapshot
+from verdictmesh.http_client import RetryPolicy, get_with_retry
 
 
 def _to_float(value: Any, default: float = 0.0) -> float:
@@ -29,11 +31,19 @@ def _as_list(value: Any) -> list[Any]:
 
 
 class GammaClient:
-    def __init__(self, base_url: str, timeout_seconds: float = 15.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        timeout_seconds: float = 15.0,
+        transport: httpx.AsyncBaseTransport | None = None,
+        retry_policy: RetryPolicy | None = None,
+    ) -> None:
+        self._retry_policy = retry_policy or RetryPolicy()
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             timeout=httpx.Timeout(timeout_seconds),
-            headers={"User-Agent": "VerdictMesh/0.1"},
+            headers={"User-Agent": f"VerdictMesh/{__version__}"},
+            transport=transport,
         )
 
     async def close(self) -> None:
@@ -46,7 +56,8 @@ class GammaClient:
         offset: int = 0,
         order: str = "volume_24hr",
     ) -> list[dict[str, Any]]:
-        response = await self._client.get(
+        response = await get_with_retry(
+            self._client,
             "/events",
             params={
                 "active": "true",
@@ -56,6 +67,7 @@ class GammaClient:
                 "order": order,
                 "ascending": "false",
             },
+            policy=self._retry_policy,
         )
         response.raise_for_status()
         payload = response.json()
